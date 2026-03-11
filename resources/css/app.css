@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --color-accent: #5aa9ff;
+  --color-bg-dark: #000000;
+  --color-panel-dark: #141414;
+  --color-border-dark: #222222;
+  --color-bg-light: #f7f7f8;
+  --color-panel-light: #ffffff;
+  --color-border-light: #e5e5e7;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  --bg: var(--color-bg-light);
+  --panel: var(--color-panel-light);
+  --border: var(--color-border-light);
+  --fg: #111113;
+  --fg-muted: #6b7280;
+  --nav-active: #5aa9ff18;
+  --nav-hover: #5aa9ff0d;
+}
+
+.dark {
+  --bg: var(--color-bg-dark);
+  --panel: var(--color-panel-dark);
+  --border: var(--color-border-dark);
+  --fg: #ffffff;
+  --fg-muted: #888888;
+  --nav-active: #1e1e1e;
+  --nav-hover: #1a1a1a;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background-color: #5aa9ff33;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
