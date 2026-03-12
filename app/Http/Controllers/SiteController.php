@@ -93,6 +93,16 @@ class SiteController extends Controller
             'widget_config.fieldMap.url'       => ['nullable', 'string', 'max:100'],
             'widget_config.fieldMap.image'     => ['nullable', 'string', 'max:100'],
             'widget_config.fieldMap.price'     => ['nullable', 'string', 'max:100'],
+            'widget_config.resultsPageUrl'     => ['nullable', 'string', 'max:500'],
+            'widget_config.filterFields'       => ['nullable', 'array'],
+            'widget_config.filterFields.*'     => ['string', 'max:100'],
+            'widget_config.filtersSidebarBg'   => ['nullable', 'string', 'max:20'],
+            'widget_config.resultsPerPage'     => ['nullable', 'integer', 'min:4', 'max:100'],
+            'widget_config.resultsLayout'      => ['nullable', 'in:list,grid'],
+            'widget_config.cardMinWidth'           => ['nullable', 'integer', 'min:80', 'max:500'],
+            'widget_config.cardImageHeight'        => ['nullable', 'integer', 'min:60', 'max:400'],
+            'widget_config.resultsCardMinWidth'    => ['nullable', 'integer', 'min:80', 'max:500'],
+            'widget_config.resultsCardImageHeight' => ['nullable', 'integer', 'min:60', 'max:400'],
         ]);
 
         $site->update(['widget_config' => $request->widget_config]);
@@ -197,7 +207,10 @@ class SiteController extends Controller
     public function testSearch(Request $request, Site $site)
     {
         $request->validate([
-            'query' => ['required', 'string', 'max:500'],
+            'query'      => ['required', 'string', 'max:500'],
+            'facets'     => ['sometimes', 'array'],
+            'facets.*'   => ['string', 'max:100'],
+            'filter'     => ['sometimes', 'string', 'max:2000'],
         ]);
 
         try {
@@ -206,6 +219,9 @@ class SiteController extends Controller
                 $site->azure_index_name,
                 $site->azure_api_key,
                 $request->query('query'),
+                20,
+                $request->input('facets', []),
+                $request->input('filter', ''),
             );
             return response()->json($results);
         } catch (\RuntimeException $e) {

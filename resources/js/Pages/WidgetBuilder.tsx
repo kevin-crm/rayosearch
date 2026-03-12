@@ -368,18 +368,18 @@ function WidgetPreview({ config, siteId }: { config: WidgetConfig; siteId: strin
 
                     {/* Block — image-first grid cards */}
                     {config.template === 'block' && (
-                        <div style={{ padding: '10px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
+                        <div style={{ padding: '10px', display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${config.cardMinWidth ?? 180}px, 1fr))`, gap: '10px' }}>
                             {results.map((r, i) => (
                                 <div key={r.id || i} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: radius, overflow: 'hidden' }}>
                                     {r.image ? (
                                         <img
                                             src={r.image}
                                             alt={r.title}
-                                            style={{ width: '100%', aspectRatio: '16/9', objectFit: 'cover', display: 'block', background: c.panel }}
+                                            style={{ width: '100%', height: `${config.cardImageHeight ?? 120}px`, objectFit: 'cover', display: 'block', background: c.panel }}
                                             onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
                                         />
                                     ) : (
-                                        <div style={{ width: '100%', aspectRatio: '16/9', background: config.accent + '18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <div style={{ width: '100%', height: `${config.cardImageHeight ?? 120}px`, background: config.accent + '18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                             <svg width="24" height="24" viewBox="0 0 16 16" fill="none" stroke={config.accent} strokeWidth="1.5" opacity="0.6">
                                                 <rect x="1" y="1" width="14" height="14" rx="2"/>
                                                 <circle cx="5.5" cy="5.5" r="1.5"/>
@@ -405,10 +405,10 @@ function WidgetPreview({ config, siteId }: { config: WidgetConfig; siteId: strin
 
                     {/* Product — grid of product cards with price */}
                     {config.template === 'product' && (
-                        <div style={{ padding: '10px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '10px' }}>
+                        <div style={{ padding: '10px', display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${config.cardMinWidth ?? 160}px, 1fr))`, gap: '10px' }}>
                             {results.map((r, i) => (
                                 <a key={r.id || i} href={r.url || undefined} target="_blank" rel="noopener noreferrer" style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: radius, overflow: 'hidden', display: 'flex', flexDirection: 'column', textDecoration: 'none', color: 'inherit' }}>
-                                    <div style={{ width: '100%', aspectRatio: '1/1', overflow: 'hidden', flexShrink: 0 }}>
+                                    <div style={{ width: '100%', height: `${config.cardImageHeight ?? 160}px`, overflow: 'hidden', flexShrink: 0 }}>
                                         {r.image ? (
                                             <img
                                                 src={r.image}
@@ -450,6 +450,21 @@ function WidgetPreview({ config, siteId }: { config: WidgetConfig; siteId: strin
                             ))}
                         </div>
                     )}
+                    {config.resultsPageUrl && (
+                        <a
+                            href={`${config.resultsPageUrl}?q=${encodeURIComponent(query)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                                display: 'block', textAlign: 'center',
+                                padding: '9px 14px', fontSize: '12px',
+                                color: config.accent, textDecoration: 'none',
+                                borderTop: `1px solid ${c.border}`, fontWeight: 500,
+                            }}
+                        >
+                            View all {total} results →
+                        </a>
+                    )}
                 </div>
             )}
 
@@ -458,6 +473,261 @@ function WidgetPreview({ config, siteId }: { config: WidgetConfig; siteId: strin
                     Type 2+ characters to search live
                 </div>
             )}
+        </div>
+    )
+}
+
+// ── Results Page Preview ──────────────────────────────────────────────────────
+
+function ResultsPagePreview({
+    config, siteId, indexFields,
+}: { config: WidgetConfig; siteId: string; indexFields: IndexField[] }) {
+    const fieldMap = config.fieldMap ?? {}
+    const filterFields = config.filterFields ?? []
+    const layout = config.resultsLayout ?? 'list'
+    const perPage = config.resultsPerPage ?? 12
+    const cardMinWidth = config.resultsCardMinWidth ?? 140
+    const cardImageHeight = config.resultsCardImageHeight ?? 140
+
+    const [query, setQuery] = useState('')
+    const [results, setResults] = useState<SearchResult[] | null>(null)
+    const [total, setTotal] = useState(0)
+    const [loading, setLoading] = useState(false)
+    const [facetData, setFacetData] = useState<Record<string, { value: string; count: number }[]>>({})
+    const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({})
+    const [collapsedFacets, setCollapsedFacets] = useState<Set<string>>(new Set())
+
+    const toggleFacet = (name: string) =>
+        setCollapsedFacets(prev => {
+            const next = new Set(prev)
+            next.has(name) ? next.delete(name) : next.add(name)
+            return next
+        })
+    const abortRef = useRef<AbortController | null>(null)
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    const effectiveTheme = config.theme === 'auto' ? 'dark' : config.theme
+    const c = themeColors(effectiveTheme)
+    const radius = radiusPx(config.radius)
+    const facetDisplayFields = indexFields.filter(f => filterFields.includes(f.name))
+
+    const buildFilter = (filters: Record<string, string[]>): string => {
+        const parts: string[] = []
+        for (const [field, vals] of Object.entries(filters)) {
+            if (!vals.length) continue
+            const clauses = vals.map(v => `${field} eq '${v.replace(/'/g, "''")}'`)
+            parts.push(clauses.length === 1 ? clauses[0] : `(${clauses.join(' or ')})`)
+        }
+        return parts.join(' and ')
+    }
+
+    const doSearch = useCallback(async (q: string, filters: Record<string, string[]>) => {
+        abortRef.current?.abort()
+        const ctrl = new AbortController()
+        abortRef.current = ctrl
+        setLoading(true)
+        try {
+            const params = new URLSearchParams({ query: q })
+            filterFields.forEach(f => params.append('facets[]', f))
+            const filterStr = buildFilter(filters)
+            if (filterStr) params.set('filter', filterStr)
+            const res = await fetch(
+                `/sites/${encodeURIComponent(siteId)}/search-test?${params}`,
+                { signal: ctrl.signal, headers: { 'X-Requested-With': 'XMLHttpRequest' } }
+            )
+            const data = await res.json()
+            setResults((data.results ?? []).map((doc: Record<string, unknown>) => normalizeResult(doc, fieldMap)))
+            setTotal(data.total ?? 0)
+            const newFacets: Record<string, { value: string; count: number }[]> = {}
+            for (const [field, vals] of Object.entries(data.facets ?? {})) {
+                newFacets[field] = vals as { value: string; count: number }[]
+            }
+            setFacetData(newFacets)
+        } catch { /* aborted */ }
+        finally { setLoading(false) }
+    }, [siteId, filterFields, fieldMap]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleInput = (val: string) => {
+        setQuery(val)
+        if (timerRef.current) clearTimeout(timerRef.current)
+        if (val.trim().length >= 2) {
+            timerRef.current = setTimeout(() => doSearch(val, activeFilters), 300)
+        } else {
+            setResults(null)
+            setFacetData({})
+            setActiveFilters({})
+        }
+    }
+
+    const toggleFilter = (field: string, value: string) => {
+        setActiveFilters(prev => {
+            const curr = prev[field] ?? []
+            const next_vals = curr.includes(value) ? curr.filter(v => v !== value) : [...curr, value]
+            const next = { ...prev, [field]: next_vals }
+            if (query.trim().length >= 2) doSearch(query, next)
+            return next
+        })
+    }
+
+    const clearFilters = () => {
+        setActiveFilters({})
+        if (query.trim().length >= 2) doSearch(query, {})
+    }
+
+    const hasActiveFilters = Object.values(activeFilters).some(v => v.length > 0)
+    const hasLeft = (config.iconLeft ?? 'none') !== 'none'
+    const hasRight = (config.iconRight ?? 'none') !== 'none'
+
+    return (
+        <div style={{ background: c.bg, height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, -apple-system, sans-serif', color: c.text, overflow: 'hidden' }}>
+            {/* Search bar */}
+            <div style={{ padding: '12px 16px', borderBottom: `1px solid ${c.border}`, background: c.panel, flexShrink: 0 }}>
+                <div style={{ position: 'relative' }}>
+                    {hasLeft && (
+                        <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', display: 'flex' }}>
+                            <WidgetIconSvg icon={config.iconLeft} color={c.muted} size={13} />
+                        </span>
+                    )}
+                    <input
+                        value={query}
+                        onChange={e => handleInput(e.target.value)}
+                        placeholder={config.placeholder}
+                        style={{
+                            width: '100%', boxSizing: 'border-box',
+                            paddingTop: '8px', paddingBottom: '8px',
+                            paddingLeft: hasLeft ? '34px' : '12px',
+                            paddingRight: (hasRight || loading) ? '34px' : '12px',
+                            background: c.bg, border: `1px solid ${c.border}`,
+                            borderRadius: radius, color: c.text, fontSize: '13px', outline: 'none',
+                        }}
+                        onFocus={e => e.currentTarget.style.borderColor = config.accent}
+                        onBlur={e => e.currentTarget.style.borderColor = c.border}
+                    />
+                    {loading && (
+                        <div style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', width: '13px', height: '13px', border: `2px solid ${c.border}`, borderTopColor: config.accent, borderRadius: '50%', animation: 'aisg-spin .6s linear infinite' }} />
+                    )}
+                    {hasRight && !loading && (
+                        <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', display: 'flex' }}>
+                            <WidgetIconSvg icon={config.iconRight} color={c.muted} size={13} />
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            {/* Body: sidebar + results */}
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                {/* Filter sidebar */}
+                {facetDisplayFields.length > 0 && (
+                    <div style={{ width: '176px', flexShrink: 0, borderRight: `1px solid ${c.border}`, overflowY: 'auto', padding: '14px 12px', background: config.filtersSidebarBg || c.panel }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: c.muted }}>Filters</span>
+                            {hasActiveFilters && (
+                                <button onClick={clearFilters} style={{ fontSize: '10px', color: config.accent, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Clear</button>
+                            )}
+                        </div>
+                        {facetDisplayFields.map(field => {
+                            const vals = facetData[field.name] ?? []
+                            const active = activeFilters[field.name] ?? []
+                            const collapsed = collapsedFacets.has(field.name)
+                            return (
+                                <div key={field.name} style={{ marginBottom: '12px' }}>
+                                    {/* Collapsible header */}
+                                    <button
+                                        onClick={() => toggleFacet(field.name)}
+                                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 6px 0', marginBottom: collapsed ? 0 : '4px' }}
+                                    >
+                                        <span style={{ fontSize: '11px', fontWeight: 600, color: c.text, textTransform: 'capitalize' }}>{field.name}</span>
+                                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke={c.muted} strokeWidth="1.5" strokeLinecap="round" style={{ transition: 'transform .15s', transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', flexShrink: 0 }}>
+                                            <path d="M2 3.5l3 3 3-3"/>
+                                        </svg>
+                                    </button>
+                                    {!collapsed && (
+                                        <>
+                                            {vals.length === 0 && (
+                                                <div style={{ fontSize: '11px', color: c.muted, fontStyle: 'italic' }}>
+                                                    {results === null ? 'Search to load' : 'No values'}
+                                                </div>
+                                            )}
+                                            {vals.map(({ value, count }) => (
+                                                <label key={value} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px', cursor: 'pointer' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={active.includes(value)}
+                                                        onChange={() => toggleFilter(field.name, value)}
+                                                        style={{ accentColor: config.accent, cursor: 'pointer', margin: 0, width: '12px', height: '12px' }}
+                                                    />
+                                                    <span style={{ flex: 1, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+                                                    <span style={{ fontSize: '10px', color: c.muted, flexShrink: 0 }}>({count})</span>
+                                                </label>
+                                            ))}
+                                        </>
+                                    )}
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+
+                {/* Results */}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '14px' }}>
+                    {results === null && !loading && (
+                        <div style={{ textAlign: 'center', color: c.muted, fontSize: '12px', paddingTop: '40px' }}>
+                            Type to search
+                        </div>
+                    )}
+                    {results !== null && results.length === 0 && (
+                        <div style={{ textAlign: 'center', color: c.muted, fontSize: '12px', paddingTop: '20px' }}>No results found.</div>
+                    )}
+                    {results !== null && results.length > 0 && (
+                        <>
+                            <div style={{ fontSize: '11px', color: c.muted, marginBottom: '12px' }}>
+                                {total} result{total !== 1 ? 's' : ''} for <strong style={{ color: c.text }}>"{query}"</strong>
+                                {hasActiveFilters && (
+                                    <span> · <button onClick={clearFilters} style={{ background: 'none', border: 'none', color: config.accent, cursor: 'pointer', fontSize: '11px', padding: 0 }}>Clear filters</button></span>
+                                )}
+                            </div>
+                            {/* Grid */}
+                            {layout === 'grid' && (
+                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${cardMinWidth}px, 1fr))`, gap: '10px' }}>
+                                    {results.slice(0, perPage).map((r, i) => (
+                                        <a key={r.id || i} href={r.url || undefined} target="_blank" rel="noopener noreferrer"
+                                            style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: radius, overflow: 'hidden', display: 'flex', flexDirection: 'column', textDecoration: 'none', color: 'inherit' }}>
+                                            <ImageThumb src={r.image} accent={config.accent} size={cardImageHeight} radius="0" />
+                                            <div style={{ padding: '8px', flex: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                                <div style={{ fontSize: '12px', fontWeight: 600, color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title || '(no title)'}</div>
+                                                {r.snippet && <div style={{ fontSize: '11px', color: c.muted, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }}>{r.snippet}</div>}
+                                                <div style={{ marginTop: 'auto', paddingTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                                                    {r.price && <span style={{ fontSize: '12px', fontWeight: 700, color: config.accent }}>{r.price}</span>}
+                                                    {r.url && <span style={{ fontSize: '10px', color: config.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.8 }}>{r.url.replace(/^https?:\/\//, '').split('/')[0]}</span>}
+                                                </div>
+                                            </div>
+                                        </a>
+                                    ))}
+                                </div>
+                            )}
+                            {/* List */}
+                            {layout === 'list' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    {results.slice(0, perPage).map((r, i) => (
+                                        <a key={r.id || i} href={r.url || undefined} target="_blank" rel="noopener noreferrer"
+                                            style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '10px', background: c.bg, border: `1px solid ${c.border}`, borderRadius: radius, textDecoration: 'none', color: 'inherit' }}>
+                                            <ImageThumb src={r.image} accent={config.accent} size={48} radius={radius} />
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ fontSize: '13px', fontWeight: 600, color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title || '(no title)'}</div>
+                                                {r.snippet && <div style={{ fontSize: '11px', color: c.muted, marginTop: '2px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }}>{r.snippet}</div>}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '5px' }}>
+                                                    {r.price && <span style={{ fontSize: '12px', fontWeight: 700, color: config.accent }}>{r.price}</span>}
+                                                    {r.url && <span style={{ fontSize: '10px', color: config.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.8 }}>{r.url.replace(/^https?:\/\//, '')}</span>}
+                                                </div>
+                                            </div>
+                                        </a>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
         </div>
     )
 }
@@ -571,6 +841,7 @@ export default function WidgetBuilder({ sites }: Props) {
     const [placement, setPlacement] = useState<'inline' | 'target'>('inline')
     const [targetSelector, setTargetSelector] = useState('')
     const [indexFields, setIndexFields] = useState<IndexField[]>([])
+    const [activeTab, setActiveTab] = useState<'searchbar' | 'resultspage'>('searchbar')
 
     const config = activeSiteId ? (configs[activeSiteId] ?? DEFAULT_CONFIG) : DEFAULT_CONFIG
 
@@ -620,8 +891,7 @@ export default function WidgetBuilder({ sites }: Props) {
     const resolvedTarget = placement === 'target' ? targetSelector.trim() : ''
 
     const fm = config.fieldMap ?? {}
-    const embedScript = activeSite ? [
-        `<script`,
+    const sharedAttrs = activeSite ? [
         `  src="${window.location.origin}/widget.js"`,
         `  data-site="${activeSite.site_id}"`,
         `  data-api="${window.location.origin}"`,
@@ -629,21 +899,44 @@ export default function WidgetBuilder({ sites }: Props) {
         `  data-accent="${config.accent}"`,
         `  data-theme="${config.theme}"`,
         `  data-radius="${config.radius}"`,
-        `  data-placeholder="${config.placeholder}"`,
-        ...(config.iconLeft  && config.iconLeft  !== 'none' ? [`  data-icon-left="${config.iconLeft}"`]  : []),
-        ...(config.iconRight && config.iconRight !== 'none' ? [`  data-icon-right="${config.iconRight}"`] : []),
-        ...(config.bgColor ? [`  data-bg-color="${config.bgColor}"`] : []),
         ...(fm.title   ? [`  data-field-title="${fm.title}"`]   : []),
         ...(fm.snippet ? [`  data-field-snippet="${fm.snippet}"`] : []),
         ...(fm.url     ? [`  data-field-url="${fm.url}"`]     : []),
         ...(fm.image   ? [`  data-field-image="${fm.image}"`]   : []),
         ...(fm.price   ? [`  data-field-price="${fm.price}"`]   : []),
+    ] : []
+
+    const embedScript = activeSite ? [
+        `<script`,
+        ...sharedAttrs,
+        `  data-placeholder="${config.placeholder}"`,
+        ...(config.iconLeft  && config.iconLeft  !== 'none' ? [`  data-icon-left="${config.iconLeft}"`]  : []),
+        ...(config.iconRight && config.iconRight !== 'none' ? [`  data-icon-right="${config.iconRight}"`] : []),
+        ...(config.bgColor ? [`  data-bg-color="${config.bgColor}"`] : []),
+        ...(config.resultsPageUrl ? [`  data-results-page="${config.resultsPageUrl}"`] : []),
+        ...((config.template === 'block' || config.template === 'product') && config.cardMinWidth ? [`  data-card-min-width="${config.cardMinWidth}"`] : []),
+        ...((config.template === 'block' || config.template === 'product') && config.cardImageHeight ? [`  data-card-image-height="${config.cardImageHeight}"`] : []),
         ...(resolvedTarget ? [`  data-target="${resolvedTarget}"`] : []),
         `></script>`,
     ].join('\n') : ''
 
+    const resultsPageScript = activeSite ? [
+        `<script`,
+        ...sharedAttrs,
+        `  data-mode="results-page"`,
+        ...(config.filterFields?.length ? [`  data-filter-fields="${config.filterFields.join(',')}"`] : []),
+        ...(config.resultsPerPage ? [`  data-results-per-page="${config.resultsPerPage}"`] : []),
+        ...(config.resultsLayout ? [`  data-results-layout="${config.resultsLayout}"`] : []),
+        ...(config.resultsCardMinWidth ? [`  data-results-card-min-width="${config.resultsCardMinWidth}"`] : []),
+        ...(config.resultsCardImageHeight ? [`  data-results-card-image-height="${config.resultsCardImageHeight}"`] : []),
+        ...(config.filtersSidebarBg ? [`  data-filters-sidebar-bg="${config.filtersSidebarBg}"`] : []),
+        `></script>`,
+    ].join('\n') : ''
+
+    const activeScript = activeTab === 'resultspage' ? resultsPageScript : embedScript
+
     const copyScript = () => {
-        navigator.clipboard.writeText(embedScript)
+        navigator.clipboard.writeText(activeScript)
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
     }
@@ -693,6 +986,24 @@ export default function WidgetBuilder({ sites }: Props) {
                     ))}
                 </div>
 
+                {/* Page tabs */}
+                <div className="flex items-center gap-0 shrink-0 border-b" style={{ borderColor: 'var(--border)' }}>
+                    {(['searchbar', 'resultspage'] as const).map(tab => (
+                        <button
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            className="px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px"
+                            style={{
+                                borderColor: activeTab === tab ? config.accent : 'transparent',
+                                color: activeTab === tab ? 'var(--fg)' : 'var(--fg-muted)',
+                                background: 'none', cursor: 'pointer',
+                            }}
+                        >
+                            {tab === 'searchbar' ? 'Search Bar' : 'Results Page'}
+                        </button>
+                    ))}
+                </div>
+
                 {/* Two-column layout */}
                 <div className="flex gap-5 flex-1 min-h-0">
 
@@ -707,7 +1018,166 @@ export default function WidgetBuilder({ sites }: Props) {
                             </span>
                         </div>
 
-                        <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                        <div className="flex-1 overflow-y-auto p-4">
+
+                            {/* ── Results Page Settings ── */}
+                            {activeTab === 'resultspage' && (
+                                <div className="space-y-5">
+
+                                    {/* Results Page URL */}
+                                    <div>
+                                        <label className={labelClass} style={labelStyle}>Results Page URL</label>
+                                        <p className="text-[11px] mb-2" style={{ color: 'var(--fg-muted)' }}>
+                                            Where on your site the results page is hosted (e.g. <code className="font-mono">/search</code>). The search bar will link "View all" here.
+                                        </p>
+                                        <input
+                                            type="text"
+                                            value={config.resultsPageUrl ?? ''}
+                                            onChange={e => set('resultsPageUrl', e.target.value || undefined)}
+                                            placeholder="/search"
+                                            maxLength={500}
+                                            className="w-full px-2.5 py-1.5 rounded border text-xs outline-none focus:border-[#5aa9ff] transition-colors bg-transparent font-mono"
+                                            style={{ borderColor: 'var(--border)', color: 'var(--fg)' }}
+                                        />
+                                    </div>
+
+                                    {/* Filter Fields */}
+                                    <div>
+                                        <label className={labelClass} style={labelStyle}>Filter Sidebar Fields</label>
+                                        <p className="text-[11px] mb-2" style={{ color: 'var(--fg-muted)' }}>
+                                            Pick filterable index fields to show as sidebar filters.
+                                        </p>
+                                        {indexFields.filter(f => f.filterable || f.facetable).length === 0 ? (
+                                            <p className="text-[11px]" style={{ color: 'var(--fg-muted)' }}>
+                                                No filterable fields in the index.
+                                            </p>
+                                        ) : (
+                                            <div className="space-y-1.5">
+                                                {indexFields.filter(f => f.filterable || f.facetable).map(field => {
+                                                    const active = (config.filterFields ?? []).includes(field.name)
+                                                    return (
+                                                        <label key={field.name} className="flex items-center gap-2 cursor-pointer">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={active}
+                                                                onChange={() => {
+                                                                    const current = config.filterFields ?? []
+                                                                    const next = active
+                                                                        ? current.filter(f => f !== field.name)
+                                                                        : [...current, field.name]
+                                                                    set('filterFields', next.length > 0 ? next : undefined)
+                                                                }}
+                                                                style={{ accentColor: config.accent, cursor: 'pointer' }}
+                                                            />
+                                                            <span className="text-xs" style={{ color: 'var(--fg)' }}>{field.name}</span>
+                                                            {field.facetable && (
+                                                                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: config.accent + '22', color: config.accent }}>facetable</span>
+                                                            )}
+                                                        </label>
+                                                    )
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Filters Sidebar Background */}
+                                    <div>
+                                        <label className={labelClass} style={labelStyle}>Filters Sidebar Background</label>
+                                        <div className="flex items-center gap-2.5">
+                                            <input
+                                                type="color"
+                                                value={config.filtersSidebarBg || '#f3f4f6'}
+                                                onChange={e => set('filtersSidebarBg', e.target.value)}
+                                                className="w-9 h-9 rounded border cursor-pointer p-0.5"
+                                                style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg)' }}
+                                            />
+                                            <input
+                                                type="text"
+                                                value={config.filtersSidebarBg || ''}
+                                                onChange={e => set('filtersSidebarBg', e.target.value || undefined)}
+                                                placeholder="Default"
+                                                maxLength={20}
+                                                className="flex-1 px-2.5 py-1.5 rounded border text-xs font-mono outline-none focus:border-[#5aa9ff] transition-colors bg-transparent"
+                                                style={{ borderColor: 'var(--border)', color: 'var(--fg)' }}
+                                            />
+                                            {config.filtersSidebarBg && (
+                                                <button
+                                                    onClick={() => set('filtersSidebarBg', undefined)}
+                                                    className="text-[11px] px-2 py-1 rounded border transition-colors"
+                                                    style={{ borderColor: 'var(--border)', color: 'var(--fg-muted)' }}
+                                                    title="Reset"
+                                                >✕</button>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Results Per Page */}
+                                    <div>
+                                        <label className={labelClass} style={labelStyle}>Results Per Page</label>
+                                        <div className="flex items-center gap-2.5">
+                                            <input
+                                                type="range"
+                                                min={4} max={48} step={4}
+                                                value={config.resultsPerPage ?? 12}
+                                                onChange={e => set('resultsPerPage', Number(e.target.value))}
+                                                className="flex-1"
+                                                style={{ accentColor: config.accent }}
+                                            />
+                                            <span className="text-xs font-mono w-6 text-right" style={{ color: 'var(--fg)' }}>
+                                                {config.resultsPerPage ?? 12}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* Layout */}
+                                    <div>
+                                        <label className={labelClass} style={labelStyle}>Results Layout</label>
+                                        <ToggleGroup
+                                            options={[
+                                                { value: 'list', label: 'List' },
+                                                { value: 'grid', label: 'Grid' },
+                                            ]}
+                                            value={config.resultsLayout ?? 'list'}
+                                            onChange={v => set('resultsLayout', v)}
+                                        />
+                                    </div>
+
+                                    {/* Card Size */}
+                                    {(config.resultsLayout ?? 'list') === 'grid' && (
+                                        <div>
+                                            <label className={labelClass} style={labelStyle}>Card Size</label>
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <div className="flex justify-between mb-1">
+                                                        <span className="text-[11px]" style={{ color: 'var(--fg-muted)' }}>Min width</span>
+                                                        <span className="text-[11px] font-mono" style={{ color: 'var(--fg)' }}>{config.resultsCardMinWidth ?? 140}px</span>
+                                                    </div>
+                                                    <input type="range" min={80} max={400} step={10}
+                                                        value={config.resultsCardMinWidth ?? 140}
+                                                        onChange={e => set('resultsCardMinWidth', Number(e.target.value))}
+                                                        className="w-full" style={{ accentColor: config.accent }}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <div className="flex justify-between mb-1">
+                                                        <span className="text-[11px]" style={{ color: 'var(--fg-muted)' }}>Image height</span>
+                                                        <span className="text-[11px] font-mono" style={{ color: 'var(--fg)' }}>{config.resultsCardImageHeight ?? 140}px</span>
+                                                    </div>
+                                                    <input type="range" min={60} max={400} step={10}
+                                                        value={config.resultsCardImageHeight ?? 140}
+                                                        onChange={e => set('resultsCardImageHeight', Number(e.target.value))}
+                                                        className="w-full" style={{ accentColor: config.accent }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                </div>
+                            )}
+
+                            {/* ── Search Bar Settings ── */}
+                            {activeTab === 'searchbar' && <div className="space-y-5">
 
                             {/* Template — 2×2 grid */}
                             <div>
@@ -842,6 +1312,37 @@ export default function WidgetBuilder({ sites }: Props) {
                                 </div>
                             </div>
 
+                            {/* Card Size — block / product templates only */}
+                            {(config.template === 'block' || config.template === 'product') && (
+                                <div>
+                                    <label className={labelClass} style={labelStyle}>Card Size</label>
+                                    <div className="space-y-3">
+                                        <div>
+                                            <div className="flex justify-between mb-1">
+                                                <span className="text-[11px]" style={{ color: 'var(--fg-muted)' }}>Min width</span>
+                                                <span className="text-[11px] font-mono" style={{ color: 'var(--fg)' }}>{config.cardMinWidth ?? (config.template === 'block' ? 180 : 160)}px</span>
+                                            </div>
+                                            <input type="range" min={80} max={400} step={10}
+                                                value={config.cardMinWidth ?? (config.template === 'block' ? 180 : 160)}
+                                                onChange={e => set('cardMinWidth', Number(e.target.value))}
+                                                className="w-full" style={{ accentColor: config.accent }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <div className="flex justify-between mb-1">
+                                                <span className="text-[11px]" style={{ color: 'var(--fg-muted)' }}>Image height</span>
+                                                <span className="text-[11px] font-mono" style={{ color: 'var(--fg)' }}>{config.cardImageHeight ?? (config.template === 'product' ? 160 : 120)}px</span>
+                                            </div>
+                                            <input type="range" min={60} max={400} step={10}
+                                                value={config.cardImageHeight ?? (config.template === 'product' ? 160 : 120)}
+                                                onChange={e => set('cardImageHeight', Number(e.target.value))}
+                                                className="w-full" style={{ accentColor: config.accent }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Field Mapping */}
                             <div>
                                 <label className={labelClass} style={labelStyle}>Field Mapping</label>
@@ -854,6 +1355,8 @@ export default function WidgetBuilder({ sites }: Props) {
                                     indexFields={indexFields}
                                 />
                             </div>
+
+                            </div>}
 
                         </div>
 
@@ -905,15 +1408,26 @@ export default function WidgetBuilder({ sites }: Props) {
                             </div>
 
                             {/* Full-width mock page */}
-                            <div className="flex-1 overflow-auto p-6" style={{ backgroundColor: config.theme === 'light' ? '#f9fafb' : config.theme === 'dark' ? '#0a0a0a' : 'var(--bg)' }}>
-                                <div className="flex items-center gap-4 mb-6 pb-4 border-b" style={{ borderColor: config.theme === 'light' ? '#e5e7eb' : '#1f1f1f' }}>
-                                    <div className="w-16 h-4 rounded" style={{ backgroundColor: config.theme === 'light' ? '#e5e7eb' : '#222' }} />
-                                    {[1, 2, 3].map(i => (
-                                        <div key={i} className="w-10 h-3 rounded" style={{ backgroundColor: config.theme === 'light' ? '#f3f4f6' : '#1a1a1a' }} />
-                                    ))}
+                            {activeTab === 'searchbar' ? (
+                                <div className="flex-1 overflow-auto p-6" style={{ backgroundColor: config.theme === 'light' ? '#f9fafb' : config.theme === 'dark' ? '#0a0a0a' : 'var(--bg)' }}>
+                                    <div className="flex items-center gap-4 mb-6 pb-4 border-b" style={{ borderColor: config.theme === 'light' ? '#e5e7eb' : '#1f1f1f' }}>
+                                        <div className="w-16 h-4 rounded" style={{ backgroundColor: config.theme === 'light' ? '#e5e7eb' : '#222' }} />
+                                        {[1, 2, 3].map(i => (
+                                            <div key={i} className="w-10 h-3 rounded" style={{ backgroundColor: config.theme === 'light' ? '#f3f4f6' : '#1a1a1a' }} />
+                                        ))}
+                                    </div>
+                                    {activeSite && <WidgetPreview key={activeSite.site_id} config={config} siteId={activeSite.site_id} />}
                                 </div>
-                                {activeSite && <WidgetPreview key={activeSite.site_id} config={config} siteId={activeSite.site_id} />}
-                            </div>
+                            ) : (
+                                <div className="flex-1 overflow-hidden">
+                                    {activeSite && <ResultsPagePreview key={activeSite.site_id} config={config} siteId={activeSite.site_id} indexFields={indexFields} />}
+                                    {!activeSite && (
+                                        <div className="flex items-center justify-center h-full" style={{ color: 'var(--fg-muted)', fontSize: '12px' }}>
+                                            Select a site to preview
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* Embed panel */}
@@ -947,56 +1461,65 @@ export default function WidgetBuilder({ sites }: Props) {
                                 </div>
 
                                 {embedOpen && (<>
-                                    {/* Placement selector */}
-                                    <div className="px-4 pt-3 pb-2 border-b" style={{ borderColor: 'var(--border)' }}>
-                                        <p className="text-[11px] font-medium mb-2" style={{ color: 'var(--fg-muted)' }}>Placement</p>
-                                        <div className="space-y-2">
-                                            <label className="flex items-start gap-2.5 cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name="wb-placement"
-                                                    checked={placement === 'inline'}
-                                                    onChange={() => setPlacement('inline')}
-                                                    className="mt-0.5 accent-[#5aa9ff] cursor-pointer"
-                                                />
-                                                <div>
-                                                    <p className="text-[11px] font-medium" style={{ color: 'var(--fg)' }}>Inline</p>
-                                                    <p className="text-[10px] leading-relaxed" style={{ color: 'var(--fg-muted)' }}>
-                                                        Widget renders right where the <code style={{ fontFamily: 'monospace' }}>&lt;script&gt;</code> tag is placed in your HTML.
-                                                    </p>
-                                                </div>
-                                            </label>
-                                            <label className="flex items-start gap-2.5 cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name="wb-placement"
-                                                    checked={placement === 'target'}
-                                                    onChange={() => setPlacement('target')}
-                                                    className="mt-0.5 accent-[#5aa9ff] cursor-pointer"
-                                                />
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-[11px] font-medium" style={{ color: 'var(--fg)' }}>Target element</p>
-                                                    <p className="text-[10px] leading-relaxed mb-1.5" style={{ color: 'var(--fg-muted)' }}>
-                                                        Renders into a specific element — script can go anywhere on the page.
-                                                    </p>
-                                                    {placement === 'target' && (
-                                                        <input
-                                                            type="text"
-                                                            value={targetSelector}
-                                                            onChange={e => setTargetSelector(e.target.value)}
-                                                            placeholder="#search-container"
-                                                            className="w-full px-2 py-1 rounded border text-[11px] font-mono outline-none focus:border-[#5aa9ff] transition-colors bg-transparent"
-                                                            style={{ borderColor: 'var(--border)', color: 'var(--fg)' }}
-                                                        />
-                                                    )}
-                                                </div>
-                                            </label>
+                                    {/* Placement selector — only for search bar */}
+                                    {activeTab === 'searchbar' && (
+                                        <div className="px-4 pt-3 pb-2 border-b" style={{ borderColor: 'var(--border)' }}>
+                                            <p className="text-[11px] font-medium mb-2" style={{ color: 'var(--fg-muted)' }}>Placement</p>
+                                            <div className="space-y-2">
+                                                <label className="flex items-start gap-2.5 cursor-pointer">
+                                                    <input
+                                                        type="radio"
+                                                        name="wb-placement"
+                                                        checked={placement === 'inline'}
+                                                        onChange={() => setPlacement('inline')}
+                                                        className="mt-0.5 accent-[#5aa9ff] cursor-pointer"
+                                                    />
+                                                    <div>
+                                                        <p className="text-[11px] font-medium" style={{ color: 'var(--fg)' }}>Inline</p>
+                                                        <p className="text-[10px] leading-relaxed" style={{ color: 'var(--fg-muted)' }}>
+                                                            Widget renders right where the <code style={{ fontFamily: 'monospace' }}>&lt;script&gt;</code> tag is placed in your HTML.
+                                                        </p>
+                                                    </div>
+                                                </label>
+                                                <label className="flex items-start gap-2.5 cursor-pointer">
+                                                    <input
+                                                        type="radio"
+                                                        name="wb-placement"
+                                                        checked={placement === 'target'}
+                                                        onChange={() => setPlacement('target')}
+                                                        className="mt-0.5 accent-[#5aa9ff] cursor-pointer"
+                                                    />
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-[11px] font-medium" style={{ color: 'var(--fg)' }}>Target element</p>
+                                                        <p className="text-[10px] leading-relaxed mb-1.5" style={{ color: 'var(--fg-muted)' }}>
+                                                            Renders into a specific element — script can go anywhere on the page.
+                                                        </p>
+                                                        {placement === 'target' && (
+                                                            <input
+                                                                type="text"
+                                                                value={targetSelector}
+                                                                onChange={e => setTargetSelector(e.target.value)}
+                                                                placeholder="#search-container"
+                                                                className="w-full px-2 py-1 rounded border text-[11px] font-mono outline-none focus:border-[#5aa9ff] transition-colors bg-transparent"
+                                                                style={{ borderColor: 'var(--border)', color: 'var(--fg)' }}
+                                                            />
+                                                        )}
+                                                    </div>
+                                                </label>
+                                            </div>
                                         </div>
-                                    </div>
+                                    )}
+                                    {activeTab === 'resultspage' && (
+                                        <div className="px-4 pt-3 pb-2 border-b" style={{ borderColor: 'var(--border)' }}>
+                                            <p className="text-[10px] leading-relaxed" style={{ color: 'var(--fg-muted)' }}>
+                                                Place this script on the page where your results page lives (e.g. <code className="font-mono">/search</code>). It reads the <code className="font-mono">?q=</code> URL parameter automatically.
+                                            </p>
+                                        </div>
+                                    )}
 
                                     {/* Script code */}
                                     <pre className="px-4 py-3 text-[11px] overflow-x-auto leading-relaxed" style={{ color: 'var(--fg-muted)', fontFamily: 'monospace' }}>
-                                        {embedScript}
+                                        {activeScript}
                                     </pre>
                                 </>)}
                             </div>

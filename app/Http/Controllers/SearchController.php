@@ -17,6 +17,10 @@ class SearchController extends Controller
         $request->validate([
             'site_id' => ['required', 'string'],
             'query'   => ['required', 'string', 'max:500'],
+            'facets'  => ['sometimes', 'array'],
+            'facets.*'=> ['string', 'max:100'],
+            'filter'  => ['sometimes', 'string', 'max:2000'],
+            'top'     => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
         $site = Site::where('site_id', $request->site_id)->first();
@@ -31,14 +35,17 @@ class SearchController extends Controller
         try {
             $config   = is_array($site->widget_config) ? $site->widget_config : [];
             $fieldMap = is_array($config['fieldMap'] ?? null) ? $config['fieldMap'] : [];
+            $top      = (int) $request->input('top', 10);
 
             $results = $this->azure->search(
                 $site->azure_endpoint,
                 $site->azure_index_name,
                 $site->azure_api_key,
                 $request->input('query'),
-                10,
+                $top,
                 $fieldMap,
+                $request->input('facets', []),
+                $request->input('filter', ''),
             );
 
             SearchLog::create([

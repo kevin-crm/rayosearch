@@ -24,6 +24,18 @@ export interface WidgetConfig {
   iconRight: WidgetIcon
   bgColor?: string
   fieldMap?: WidgetFieldMap
+  // Results page
+  resultsPageUrl?: string
+  filterFields?: string[]
+  filtersSidebarBg?: string
+  resultsPerPage?: number
+  resultsLayout?: 'list' | 'grid'
+  // Card sizing — search bar (block / product templates)
+  cardMinWidth?: number
+  cardImageHeight?: number
+  // Card sizing — results page (grid layout)
+  resultsCardMinWidth?: number
+  resultsCardImageHeight?: number
 }
 
 export interface Site {

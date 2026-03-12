@@ -47,24 +47,34 @@ class AzureSearchService
      *
      * @return array{results: array<array{id:string,title:string,snippet:string,url:string,score:float}>, total: int, query: string}
      */
-    public function search(string $endpoint, string $indexName, string $apiKey, string $query, int $top = 10, array $fieldMap = []): array
+    public function search(string $endpoint, string $indexName, string $apiKey, string $query, int $top = 10, array $fieldMap = [], array $facetFields = [], string $filter = ''): array
     {
         $endpoint = rtrim($endpoint, '/');
         $url = "{$endpoint}/indexes/{$indexName}/docs/search?api-version=" . self::API_VERSION;
+
+        $body = [
+            'search'        => $query,
+            'top'           => $top,
+            'count'         => true,
+            'queryType'     => 'simple',
+            'searchMode'    => 'any',
+            'select'        => '*',
+        ];
+
+        if (!empty($facetFields)) {
+            $body['facets'] = array_map(fn($f) => "{$f},count:20", $facetFields);
+        }
+
+        if ($filter !== '') {
+            $body['filter'] = $filter;
+        }
 
         $response = Http::timeout(15)
             ->withHeaders([
                 'api-key'      => $apiKey,
                 'Content-Type' => 'application/json',
             ])
-            ->post($url, [
-                'search'        => $query,
-                'top'           => $top,
-                'count'         => true,
-                'queryType'     => 'simple',
-                'searchMode'    => 'any',
-                'select'        => '*',
-            ]);
+            ->post($url, $body);
 
         if ($response->status() === 401) {
             throw new \RuntimeException('Authentication failed — API key is invalid.');
@@ -87,6 +97,7 @@ class AzureSearchService
             'query'   => $query,
             'total'   => $total,
             'results' => array_map(fn($item) => $this->normalizeResult($item, $fieldMap), $items),
+            'facets'  => $body['@search.facets'] ?? [],
         ];
     }
 
@@ -333,20 +344,30 @@ class AzureSearchService
      * @return array{total: int, results: array<array<string,mixed>>}
      * @throws \RuntimeException
      */
-    public function testSearch(string $endpoint, string $indexName, string $apiKey, string $query, int $top = 20): array
+    public function testSearch(string $endpoint, string $indexName, string $apiKey, string $query, int $top = 20, array $facetFields = [], string $filter = ''): array
     {
         $endpoint = rtrim($endpoint, '/');
         $url = "{$endpoint}/indexes/{$indexName}/docs/search?api-version=" . self::API_VERSION;
 
+        $body = [
+            'search'     => $query,
+            'top'        => $top,
+            'count'      => true,
+            'searchMode' => 'any',
+            'select'     => '*',
+        ];
+
+        if (!empty($facetFields)) {
+            $body['facets'] = array_map(fn($f) => "{$f},count:20", $facetFields);
+        }
+
+        if ($filter !== '') {
+            $body['filter'] = $filter;
+        }
+
         $response = Http::timeout(15)
             ->withHeaders(['api-key' => $apiKey, 'Content-Type' => 'application/json'])
-            ->post($url, [
-                'search'     => $query,
-                'top'        => $top,
-                'count'      => true,
-                'searchMode' => 'any',
-                'select'     => '*',
-            ]);
+            ->post($url, $body);
 
         if ($response->status() === 401) {
             throw new \RuntimeException('Authentication failed — API key is invalid.');
@@ -369,6 +390,7 @@ class AzureSearchService
         return [
             'total'   => $body['@odata.count'] ?? count($items),
             'results' => array_values($clean),
+            'facets'  => $body['@search.facets'] ?? [],
         ];
     }
 
