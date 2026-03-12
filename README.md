@@ -5,10 +5,11 @@ RayoSearch is an open-source platform that helps developers and merchants deploy
 Instead of manually configuring indexes, APIs, and UI components, RayoSearch provides a dashboard to:
 
 - Connect an Azure AI Search instance
-- Generate search indexes
+- Create and manage search indexes and field schemas
 - Upload searchable documents
-- Build an embeddable search widget
-- Deploy search instantly with a lightweight JavaScript snippet
+- Build an embeddable search bar with instant autocomplete
+- Build a full results page with faceted filters, grid/list layouts, and configurable cards
+- Deploy both with lightweight JavaScript snippets — no framework required
 
 The goal is simple: turn Azure AI Search into a plug-and-play search service for any website.
 
@@ -40,19 +41,44 @@ Upload structured JSON documents to populate your search index.
 Generate a drop-in JavaScript search component for your site with instant search UI, customizable styling, and minimal footprint.
 
 ```html
-<script src="https://your-domain/widget.js"></script>
-```
+<!-- Search bar -->
+<script
+  src="https://your-domain/widget.js"
+  data-site="site_xxx"
+  data-api="https://your-domain"
+  data-results-page="https://your-site.com/search"
+></script>
 
-Your site will have a fully functional search experience powered by Azure AI Search.
+<!-- Results page (on your dedicated search page) -->
+<script
+  src="https://your-domain/widget.js"
+  data-site="site_xxx"
+  data-api="https://your-domain"
+  data-mode="results-page"
+  data-filter-fields="category,brand"
+></script>
+```
 
 ### Widget Builder
 
-Customize your search UI without writing frontend code.
+Customize your entire search experience without writing frontend code.
 
-- Search bar styles
-- Result layout templates
-- Accent colors and theme support (light / dark)
-- Placeholder text
+**Search Bar tab**
+
+- Template styles: Minimal, Card, Block, Product
+- Accent colors, theme (light / dark / auto), border radius
+- Left/right icon picker, placeholder text
+- Card width and image height (for Block and Product templates)
+- Results page URL — pressing Enter or clicking "View all results" navigates users to your dedicated search page
+
+**Results Page tab**
+
+- Live preview with real data from your Azure index
+- Filter sidebar with collapsible facets — select which filterable fields appear as checkboxes
+- Grid or list layout with configurable cards per page
+- Independent card width and image height for the results page
+- Filters sidebar background color
+- Generated embed script ready to paste into your search page
 
 ### Site Management
 
@@ -66,12 +92,14 @@ RayoSearch acts as a control layer on top of Azure AI Search.
 
 1. Create a site inside RayoSearch
 2. Connect your Azure AI Search service
-3. Generate a search index
+3. Create or configure your search index and field schema
 4. Upload documents to the index
-5. Configure your search widget
-6. Embed the generated script on your website
+5. Open the Widget Builder — configure the Search Bar and Results Page tabs
+6. Paste the **search bar script** wherever you want the search input on your site
+7. Create a dedicated search page on your site and paste the **results page script** into it
+8. Set the results page URL in the Widget Builder so Enter / "View all results" navigates users there
 
-Your site now has fully functional search powered by Azure AI Search.
+Your site now has a fully functional search experience — autocomplete search bar, full results page with faceted filters, and everything powered by Azure AI Search.
 
 ---
 

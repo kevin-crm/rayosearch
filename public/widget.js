@@ -17,6 +17,9 @@
  *   data-field-url     — Index field name to use as URL
  *   data-field-image   — Index field name to use as image URL
  *   data-field-price   — Index field name to use as price
+ *   data-results-page  — URL of your dedicated search/results page (Enter key and "View all" link navigate here with ?q=)
+ *   data-card-min-width     — Min card width in px for block/product templates (default: block=180, product=160)
+ *   data-card-image-height  — Card image height in px for block/product templates (default: block=120, product=160)
  *
  * Results page mode (data-mode="results-page"):
  *   data-filter-fields       — Comma-separated list of filterable field names
